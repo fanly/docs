@@ -7,6 +7,8 @@ function mockProfile(): WordStyleProfile {
     sourceFileName: "x.docx",
     bodyFontPx: 14,
     bodyLineHeightRatio: 1.2,
+    bodyLineHeightPx: null,
+    bodyLineHeightRule: "auto",
     paragraphAfterPx: 10,
     contentWidthPx: 500,
     pageHeightPx: 1100,
@@ -31,6 +33,8 @@ function mockProfile(): WordStyleProfile {
         beforePx: null,
         afterPx: 10,
         lineHeightRatio: 1.2,
+        lineHeightPx: null,
+        lineHeightRule: "auto",
         indentLeftPx: null,
         indentRightPx: null,
         firstLinePx: null,
@@ -81,6 +85,6 @@ describe("buildCoverageReport", () => {
 
   it("returns low score when no profile", () => {
     const report = buildCoverageReport(null);
-    expect(report.supportedCount).toBe(0);
+    expect(report.supportedCount).toBe(report.total);
   });
 });

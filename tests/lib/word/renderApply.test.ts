@@ -18,6 +18,8 @@ function makeParagraphProfile(index: number, text: string, overrides?: Partial<P
     beforePx: null,
     afterPx: 10,
     lineHeightRatio: 1.2,
+    lineHeightPx: null,
+    lineHeightRule: "auto",
     indentLeftPx: null,
     indentRightPx: null,
     firstLinePx: null,
@@ -60,6 +62,8 @@ function makeProfile(paragraphProfiles: ParagraphStyleProfile[]): WordStyleProfi
     sourceFileName: "test.docx",
     bodyFontPx: 14.67,
     bodyLineHeightRatio: 1.158333,
+    bodyLineHeightPx: null,
+    bodyLineHeightRule: "auto",
     paragraphAfterPx: 10.67,
     contentWidthPx: 553.73,
     pageHeightPx: 220,
@@ -198,5 +202,118 @@ describe("applyWordRenderModel", () => {
     const styleText = document.getElementById("__word_style_profile__")?.textContent ?? "";
     expect(styleText).toContain("padding-left: 20.00px");
     expect(styleText).toContain("padding-right: 21.00px");
+  });
+
+  it("enforces content width and constrains oversized images", () => {
+    document.body.innerHTML = `
+      <div id="wrap">
+        <p id="p1">正文内容用于宽度测量。</p>
+        <p><img id="img1" src="x" style="width: 1200px !important; height: 500px;" /></p>
+      </div>
+    `;
+    setHeight(document.getElementById("p1")!, 28);
+
+    const profile = makeProfile([
+      makeParagraphProfile(0, "正文内容用于宽度测量。"),
+      makeParagraphProfile(1, "")
+    ]);
+
+    applyWordRenderModel({ doc: document, styleProfile: profile, showFormattingMarks: false });
+
+    expect(document.body.style.getPropertyValue("width")).toBe("553.73px");
+    expect(document.body.style.getPropertyPriority("width")).toBe("important");
+    const img = document.getElementById("img1") as HTMLElement;
+    expect(img.style.getPropertyValue("max-width")).toBe("100%");
+    expect(img.style.getPropertyPriority("max-width")).toBe("important");
+  });
+
+  it("does not anchor date paragraph to page bottom when there is content after date", () => {
+    document.body.innerHTML = `
+      <p id="p1">正文</p>
+      <p id="p2">2026 年 2 月 5 日</p>
+      <p id="p3"><img src="x" /></p>
+    `;
+    setHeight(document.getElementById("p1")!, 28);
+    setHeight(document.getElementById("p2")!, 28);
+    setHeight(document.getElementById("p3")!, 80);
+
+    const profile = makeProfile([
+      makeParagraphProfile(0, "正文"),
+      makeParagraphProfile(1, "2026 年 2 月 5 日", { align: "right" }),
+      makeParagraphProfile(2, "")
+    ]);
+    profile.trailingDateAlignedRight = true;
+    profile.trailingDateText = "2026 年 2 月 5 日";
+    profile.trailingDateParagraphIndex = 1;
+    profile.trailingEmptyParagraphCountBeforeDate = 3;
+
+    applyWordRenderModel({ doc: document, styleProfile: profile, showFormattingMarks: false });
+
+    const dateParagraph = document.getElementById("p2")!;
+    expect(dateParagraph.classList.contains("__word-date-anchor")).toBe(false);
+    expect((dateParagraph.previousElementSibling as HTMLElement | null)?.id).toBe("p1");
+  });
+
+  it("applies fixed pixel line-height for exact/atLeast paragraph rules", () => {
+    document.body.innerHTML = `<p id="p1">A</p><p id="p2">B</p>`;
+    setHeight(document.getElementById("p1")!, 24);
+    setHeight(document.getElementById("p2")!, 24);
+
+    const profile = makeProfile([
+      makeParagraphProfile(0, "A", { lineHeightRatio: null, lineHeightPx: 24, lineHeightRule: "exact" }),
+      makeParagraphProfile(1, "B", { lineHeightRatio: null, lineHeightPx: 22, lineHeightRule: "atLeast" })
+    ]);
+
+    applyWordRenderModel({ doc: document, styleProfile: profile, showFormattingMarks: false });
+
+    expect((document.getElementById("p1") as HTMLElement).style.lineHeight).toBe("24px");
+    expect((document.getElementById("p2") as HTMLElement).style.lineHeight).toBe("22px");
+  });
+
+  it("does not prepend duplicated list marker when paragraph text already contains marker", () => {
+    document.body.innerHTML = `<p id="p1">1. 已存在编号文本</p>`;
+    setHeight(document.getElementById("p1")!, 28);
+
+    const profile = makeProfile([
+      makeParagraphProfile(0, "已存在编号文本", {
+        listNumId: 10,
+        listLevel: 0,
+        listFormat: "decimal",
+        listTextPattern: "%1."
+      })
+    ]);
+
+    applyWordRenderModel({ doc: document, styleProfile: profile, showFormattingMarks: false });
+
+    const p1 = document.getElementById("p1")!;
+    expect(p1.querySelectorAll("span.__word-list-marker").length).toBe(0);
+  });
+
+  it("maps profile by source paragraph index and avoids leaking list marker into table paragraphs", () => {
+    document.body.innerHTML = `
+      <h2 data-word-p-index="0">标题</h2>
+      <p id="list" data-word-p-index="1">项目符号一级 4.4</p>
+      <table><tr><td><p id="cell" data-word-p-index="2">R1C1 表格单元格</p></td></tr></table>
+    `;
+    setHeight(document.getElementById("list")!, 28);
+    setHeight(document.getElementById("cell")!, 28);
+
+    const profile = makeProfile([
+      makeParagraphProfile(0, "标题"),
+      makeParagraphProfile(1, "项目符号一级 4.4", {
+        listNumId: 2,
+        listLevel: 0,
+        listFormat: "bullet",
+        listTextPattern: "•"
+      }),
+      makeParagraphProfile(2, "R1C1 表格单元格")
+    ]);
+
+    applyWordRenderModel({ doc: document, styleProfile: profile, showFormattingMarks: false });
+
+    const list = document.getElementById("list")!;
+    const cell = document.getElementById("cell")!;
+    expect(list.querySelectorAll("span.__word-list-marker").length).toBe(1);
+    expect(cell.querySelectorAll("span.__word-list-marker").length).toBe(0);
   });
 });

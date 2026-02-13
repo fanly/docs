@@ -4,6 +4,8 @@ export interface WordStyleProfile {
   sourceFileName: string;
   bodyFontPx: number;
   bodyLineHeightRatio: number;
+  bodyLineHeightPx: number | null;
+  bodyLineHeightRule: "auto" | "exact" | "atLeast";
   paragraphAfterPx: number;
   contentWidthPx: number;
   pageHeightPx: number;
@@ -34,6 +36,8 @@ export interface ParagraphStyleProfile {
   beforePx: number | null;
   afterPx: number | null;
   lineHeightRatio: number | null;
+  lineHeightPx: number | null;
+  lineHeightRule: "auto" | "exact" | "atLeast" | null;
   indentLeftPx: number | null;
   indentRightPx: number | null;
   firstLinePx: number | null;
@@ -70,6 +74,8 @@ export interface RunStyleProfile {
 const FALLBACK_PROFILE: Omit<WordStyleProfile, "sourceFileName"> = {
   bodyFontPx: 14.6667,
   bodyLineHeightRatio: 1.158333,
+  bodyLineHeightPx: null,
+  bodyLineHeightRule: "auto",
   paragraphAfterPx: 10.67,
   contentWidthPx: 553.73,
   pageHeightPx: 1122.53,
@@ -91,6 +97,14 @@ const FALLBACK_PROFILE: Omit<WordStyleProfile, "sourceFileName"> = {
   trailingDateParagraphIndex: null,
   trailingEmptyParagraphCountBeforeDate: 0
 };
+
+export function createFallbackWordStyleProfile(sourceFileName = "snapshot"): WordStyleProfile {
+  return {
+    sourceFileName,
+    ...FALLBACK_PROFILE,
+    paragraphProfiles: []
+  };
+}
 
 function twipToPx(twip: number): number {
   return twip / 15;
@@ -317,11 +331,15 @@ function parseParagraphProfiles(documentXml: Document, numberingMap: Map<string,
     const keepNextNode = pPr ? queryAllByLocalName(pPr, "keepNext")[0] ?? null : null;
     const keepLinesNode = pPr ? queryAllByLocalName(pPr, "keepLines")[0] ?? null : null;
     const pageBreakBeforeNode = pPr ? queryAllByLocalName(pPr, "pageBreakBefore")[0] ?? null : null;
+    const renderedPageBreakNode = queryAllByLocalName(paragraph, "lastRenderedPageBreak")[0] ?? null;
     const sectionBreakNode = pPr ? queryAllByLocalName(pPr, "sectPr")[0] ?? null : null;
 
     const before = getTwipAttr(spacing, "w:before") ?? getTwipAttr(spacing, "before") ?? null;
     const after = getTwipAttr(spacing, "w:after") ?? getTwipAttr(spacing, "after") ?? null;
     const line = getTwipAttr(spacing, "w:line") ?? getTwipAttr(spacing, "line") ?? null;
+    const rawLineRule = (getAttr(spacing, "w:lineRule") ?? getAttr(spacing, "lineRule") ?? "auto").toLowerCase();
+    const lineHeightRule: "auto" | "exact" | "atLeast" | null =
+      line === null ? null : rawLineRule === "exact" ? "exact" : rawLineRule === "atleast" ? "atLeast" : "auto";
 
     const left = getTwipAttr(ind, "w:left") ?? getTwipAttr(ind, "left") ?? null;
     const right = getTwipAttr(ind, "w:right") ?? getTwipAttr(ind, "right") ?? null;
@@ -336,7 +354,9 @@ function parseParagraphProfiles(documentXml: Document, numberingMap: Map<string,
       align: parseParagraphAlign(paragraph),
       beforePx: before === null ? null : twipToPx(before),
       afterPx: after === null ? null : twipToPx(after),
-      lineHeightRatio: line === null ? null : line / 240,
+      lineHeightRatio: line === null || lineHeightRule !== "auto" ? null : line / 240,
+      lineHeightPx: line === null || lineHeightRule === "auto" ? null : twipToPx(line),
+      lineHeightRule,
       indentLeftPx: left === null ? null : twipToPx(left),
       indentRightPx: right === null ? null : twipToPx(right),
       firstLinePx: firstLine === null ? null : twipToPx(firstLine),
@@ -349,8 +369,9 @@ function parseParagraphProfiles(documentXml: Document, numberingMap: Map<string,
       keepNext: keepNextNode !== null && (getAttr(keepNextNode, "w:val") ?? getAttr(keepNextNode, "val") ?? "1") !== "0",
       keepLines: keepLinesNode !== null && (getAttr(keepLinesNode, "w:val") ?? getAttr(keepLinesNode, "val") ?? "1") !== "0",
       pageBreakBefore:
-        pageBreakBeforeNode !== null &&
-        (getAttr(pageBreakBeforeNode, "w:val") ?? getAttr(pageBreakBeforeNode, "val") ?? "1") !== "0",
+        renderedPageBreakNode !== null ||
+        (pageBreakBeforeNode !== null &&
+          (getAttr(pageBreakBeforeNode, "w:val") ?? getAttr(pageBreakBeforeNode, "val") ?? "1") !== "0"),
       sectionBreakBefore: sectionBreakNode !== null,
       runs
     };
@@ -505,11 +526,13 @@ function parseRunProfiles(paragraph: Element): RunStyleProfile[] {
 function parseDefaults(stylesXml: Document): {
   bodyFontPx: number | null;
   bodyLineHeightRatio: number | null;
+  bodyLineHeightPx: number | null;
+  bodyLineHeightRule: "auto" | "exact" | "atLeast";
   paragraphAfterPx: number | null;
 } {
   const docDefaults = queryByLocalName(stylesXml, "docDefaults");
   if (!docDefaults) {
-    return { bodyFontPx: null, bodyLineHeightRatio: null, paragraphAfterPx: null };
+    return { bodyFontPx: null, bodyLineHeightRatio: null, bodyLineHeightPx: null, bodyLineHeightRule: "auto", paragraphAfterPx: null };
   }
 
   const rPrDefault = queryByLocalName(docDefaults, "rPrDefault");
@@ -521,13 +544,16 @@ function parseDefaults(stylesXml: Document): {
   const spacing = pPrDefault ? queryByLocalName(pPrDefault, "spacing") : null;
 
   const line = getTwipAttr(spacing, "w:line") ?? getTwipAttr(spacing, "line") ?? null;
-  const lineRule = (getAttr(spacing, "w:lineRule") ?? getAttr(spacing, "lineRule") ?? "auto").toLowerCase();
-  const bodyLineHeightRatio = line === null ? null : lineRule === "auto" ? line / 240 : line / 240;
+  const rawLineRule = (getAttr(spacing, "w:lineRule") ?? getAttr(spacing, "lineRule") ?? "auto").toLowerCase();
+  const bodyLineHeightRule: "auto" | "exact" | "atLeast" =
+    rawLineRule === "exact" ? "exact" : rawLineRule === "atleast" ? "atLeast" : "auto";
+  const bodyLineHeightRatio = line === null || bodyLineHeightRule !== "auto" ? null : line / 240;
+  const bodyLineHeightPx = line === null || bodyLineHeightRule === "auto" ? null : twipToPx(line);
 
   const after = getTwipAttr(spacing, "w:after") ?? getTwipAttr(spacing, "after") ?? null;
   const paragraphAfterPx = after === null ? null : twipToPx(after);
 
-  return { bodyFontPx, bodyLineHeightRatio, paragraphAfterPx };
+  return { bodyFontPx, bodyLineHeightRatio, bodyLineHeightPx, bodyLineHeightRule, paragraphAfterPx };
 }
 
 function parseHeading1Style(stylesXml: Document): {
@@ -628,6 +654,8 @@ export async function parseDocxStyleProfile(file: File): Promise<WordStyleProfil
     sourceFileName: file.name,
     bodyFontPx: defaults.bodyFontPx ?? FALLBACK_PROFILE.bodyFontPx,
     bodyLineHeightRatio: defaults.bodyLineHeightRatio ?? FALLBACK_PROFILE.bodyLineHeightRatio,
+    bodyLineHeightPx: defaults.bodyLineHeightPx ?? FALLBACK_PROFILE.bodyLineHeightPx,
+    bodyLineHeightRule: defaults.bodyLineHeightRule ?? FALLBACK_PROFILE.bodyLineHeightRule,
     paragraphAfterPx: defaults.paragraphAfterPx ?? FALLBACK_PROFILE.paragraphAfterPx,
     contentWidthPx: pageGeometry.contentWidthPx ?? FALLBACK_PROFILE.contentWidthPx,
     pageHeightPx: pageGeometry.pageHeightPx ?? FALLBACK_PROFILE.pageHeightPx,

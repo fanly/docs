@@ -1,10 +1,14 @@
 import { applyWordHtmlCompatibility } from "@/lib/word/htmlCompat";
-import type { ParagraphStyleProfile, RunStyleProfile, WordStyleProfile } from "@/lib/word/styleProfile";
+import { createFallbackWordStyleProfile, type ParagraphStyleProfile, type RunStyleProfile, type WordStyleProfile } from "@/lib/word/styleProfile";
 
 interface ApplyWordRenderOptions {
   doc: Document;
   styleProfile: WordStyleProfile | null;
   showFormattingMarks: boolean;
+}
+
+function setImportantStyle(el: HTMLElement, prop: string, value: string): void {
+  el.style.setProperty(prop, value, "important");
 }
 
 function escapeHtml(text: string): string {
@@ -143,6 +147,11 @@ function applyBaseProfileCss(doc: Document, styleProfile: WordStyleProfile): voi
   const bottomPaddingPx = styleProfile.pageMarginBottomPx.toFixed(2);
   const pageHeightPx = styleProfile.pageHeightPx.toFixed(2);
 
+  const bodyLineHeightCss =
+    styleProfile.bodyLineHeightRule === "auto" || styleProfile.bodyLineHeightPx === null
+      ? styleProfile.bodyLineHeightRatio.toFixed(6)
+      : `${styleProfile.bodyLineHeightPx.toFixed(2)}px`;
+
   styleEl.textContent = `
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap');
     html, body { box-sizing: border-box; }
@@ -156,13 +165,11 @@ function applyBaseProfileCss(doc: Document, styleProfile: WordStyleProfile): voi
       padding-bottom: ${bottomPaddingPx}px !important;
       padding-left: 0 !important;
       padding-right: 0 !important;
-      display: flex !important;
-      flex-direction: column !important;
       font-family: ${styleProfile.bodyFontFamily} !important;
     }
     p {
       font-size: ${styleProfile.bodyFontPx.toFixed(4)}px !important;
-      line-height: ${styleProfile.bodyLineHeightRatio.toFixed(6)} !important;
+      line-height: ${bodyLineHeightCss} !important;
       margin-bottom: ${styleProfile.paragraphAfterPx.toFixed(2)}px !important;
     }
     table { border-collapse: collapse !important; border-spacing: 0 !important; }
@@ -173,10 +180,6 @@ function applyBaseProfileCss(doc: Document, styleProfile: WordStyleProfile): voi
       padding-right: ${styleProfile.tableCellPaddingRightPx.toFixed(2)}px !important;
       vertical-align: top !important;
     }
-    .__word-date-anchor {
-      margin-top: auto !important;
-      text-align: right !important;
-    }
     h1 {
       font-size: ${styleProfile.titleFontPx.toFixed(2)}px !important;
       color: ${styleProfile.titleColor} !important;
@@ -184,6 +187,40 @@ function applyBaseProfileCss(doc: Document, styleProfile: WordStyleProfile): voi
       font-family: ${styleProfile.titleFontFamily} !important;
     }
   `;
+}
+
+function applyInlineLayoutGuards(doc: Document, styleProfile: WordStyleProfile): void {
+  const body = doc.body as HTMLElement;
+  const targetWidthPx = styleProfile.contentWidthPx.toFixed(2);
+  const topPaddingPx = styleProfile.pageMarginTopPx.toFixed(2);
+  const bottomPaddingPx = styleProfile.pageMarginBottomPx.toFixed(2);
+  const pageHeightPx = styleProfile.pageHeightPx.toFixed(2);
+
+  setImportantStyle(body, "box-sizing", "border-box");
+  setImportantStyle(body, "min-height", `${pageHeightPx}px`);
+  setImportantStyle(body, "width", `${targetWidthPx}px`);
+  setImportantStyle(body, "max-width", `${targetWidthPx}px`);
+  setImportantStyle(body, "margin-left", "auto");
+  setImportantStyle(body, "margin-right", "auto");
+  setImportantStyle(body, "padding-top", `${topPaddingPx}px`);
+  setImportantStyle(body, "padding-bottom", `${bottomPaddingPx}px`);
+  setImportantStyle(body, "padding-left", "0");
+  setImportantStyle(body, "padding-right", "0");
+  setImportantStyle(body, "font-family", styleProfile.bodyFontFamily);
+
+  for (const child of Array.from(body.children)) {
+    if (!(child instanceof HTMLElement)) continue;
+    const tag = child.tagName.toLowerCase();
+    if (tag === "script" || tag === "style") continue;
+    setImportantStyle(child, "box-sizing", "border-box");
+    setImportantStyle(child, "max-width", "100%");
+  }
+
+  for (const img of Array.from(doc.body.querySelectorAll("img"))) {
+    if (!(img instanceof HTMLElement)) continue;
+    setImportantStyle(img, "max-width", "100%");
+    setImportantStyle(img, "height", "auto");
+  }
 }
 
 function normalizeEmptyParagraphMarkers(paragraphs: HTMLElement[]): void {
@@ -200,24 +237,48 @@ function normalizeEmptyParagraphMarkers(paragraphs: HTMLElement[]): void {
   }
 }
 
+function hasMeaningfulParagraphAfter(paragraphs: HTMLElement[], index: number): boolean {
+  for (let i = index + 1; i < paragraphs.length; i += 1) {
+    const p = paragraphs[i];
+    const hasText = (p.textContent ?? "").trim().length > 0;
+    const hasVisual = p.querySelector("img,table,svg,canvas") !== null;
+    if (hasText || hasVisual) return true;
+  }
+  return false;
+}
+
 function applyParagraphProfiles(doc: Document, styleProfile: WordStyleProfile): HTMLElement[] {
-  let paragraphs = Array.from(doc.body.querySelectorAll("p")) as HTMLElement[];
-  paragraphs.forEach((p) => {
+  const fallbackParagraphs = Array.from(doc.body.querySelectorAll("p")) as HTMLElement[];
+  fallbackParagraphs.forEach((p) => {
     p.classList.remove("__word-date-anchor");
     p.querySelectorAll("span.__word-list-marker").forEach((node) => node.remove());
+  });
+
+  const resolvedTargets = styleProfile.paragraphProfiles.map((profile, index) => {
+    const byIndex =
+      (doc.body.querySelector(`[data-word-p-index="${profile.index}"]`) as HTMLElement | null) ?? null;
+    const fallback = fallbackParagraphs[index] ?? null;
+    return {
+      profile,
+      node: byIndex ?? fallback
+    };
   });
 
   if (styleProfile.trailingDateAlignedRight && styleProfile.trailingDateText) {
     let dateParagraph: HTMLElement | null = null;
     if (
       styleProfile.trailingDateParagraphIndex !== null &&
-      styleProfile.trailingDateParagraphIndex >= 0 &&
-      styleProfile.trailingDateParagraphIndex < paragraphs.length
+      styleProfile.trailingDateParagraphIndex >= 0
     ) {
-      dateParagraph = paragraphs[styleProfile.trailingDateParagraphIndex];
+      dateParagraph =
+        (doc.body.querySelector(
+          `[data-word-p-index="${styleProfile.trailingDateParagraphIndex}"]`
+        ) as HTMLElement | null) ??
+        fallbackParagraphs[styleProfile.trailingDateParagraphIndex] ??
+        null;
     } else {
       dateParagraph =
-        paragraphs
+        fallbackParagraphs
           .slice()
           .reverse()
           .find((p) => {
@@ -227,7 +288,10 @@ function applyParagraphProfiles(doc: Document, styleProfile: WordStyleProfile): 
           }) ?? null;
     }
 
-    if (dateParagraph) {
+    const dateIndex = dateParagraph ? fallbackParagraphs.indexOf(dateParagraph) : -1;
+    const hasContentAfterDate = dateIndex >= 0 ? hasMeaningfulParagraphAfter(fallbackParagraphs, dateIndex) : false;
+
+    if (dateParagraph && !hasContentAfterDate) {
       let existingEmptyCount = 0;
       let cursor = dateParagraph.previousElementSibling;
       while (cursor && cursor.tagName.toLowerCase() === "p" && (cursor.textContent ?? "").trim().length === 0) {
@@ -244,18 +308,24 @@ function applyParagraphProfiles(doc: Document, styleProfile: WordStyleProfile): 
     }
   }
 
-  paragraphs = Array.from(doc.body.querySelectorAll("p")) as HTMLElement[];
+  const paragraphs = Array.from(doc.body.querySelectorAll("p")) as HTMLElement[];
   const listCounters = new Map<number, number[]>();
-  const count = Math.min(styleProfile.paragraphProfiles.length, paragraphs.length);
+  const orderedTargets: HTMLElement[] = [];
 
-  for (let i = 0; i < count; i += 1) {
-    const para = paragraphs[i];
-    const profile = styleProfile.paragraphProfiles[i];
+  for (const target of resolvedTargets) {
+    const para = target.node;
+    const profile = target.profile;
+    if (!para) continue;
+    orderedTargets.push(para);
 
     para.style.textAlign = profile.align;
     if (profile.beforePx !== null) para.style.marginTop = `${profile.beforePx.toFixed(2)}px`;
     if (profile.afterPx !== null) para.style.marginBottom = `${profile.afterPx.toFixed(2)}px`;
-    if (profile.lineHeightRatio !== null) para.style.lineHeight = profile.lineHeightRatio.toFixed(6);
+    if (profile.lineHeightRule === "auto" && profile.lineHeightRatio !== null) {
+      para.style.lineHeight = profile.lineHeightRatio.toFixed(6);
+    } else if ((profile.lineHeightRule === "exact" || profile.lineHeightRule === "atLeast") && profile.lineHeightPx !== null) {
+      para.style.lineHeight = `${profile.lineHeightPx.toFixed(2)}px`;
+    }
     if (profile.indentLeftPx !== null) para.style.marginLeft = `${profile.indentLeftPx.toFixed(2)}px`;
     if (profile.indentRightPx !== null) para.style.marginRight = `${profile.indentRightPx.toFixed(2)}px`;
     if (profile.firstLinePx !== null) para.style.textIndent = `${profile.firstLinePx.toFixed(2)}px`;
@@ -283,28 +353,28 @@ function applyParagraphProfiles(doc: Document, styleProfile: WordStyleProfile): 
       }
       listCounters.set(profile.listNumId, levels);
 
-      const marker = doc.createElement("span");
-      marker.className = "__word-list-marker";
-      marker.textContent = `${formatListMarkerByPattern(profile.listTextPattern, currentLevel, levels, profile.listFormat)} `;
-      marker.style.display = "inline-block";
-      marker.style.minWidth = "1.8em";
-      marker.style.marginLeft = currentLevel > 0 ? `${currentLevel * 1.2}em` : "0";
-      marker.style.color = "inherit";
-      marker.style.fontWeight = "inherit";
-      para.prepend(marker);
+      const markerText = formatListMarkerByPattern(profile.listTextPattern, currentLevel, levels, profile.listFormat);
+      const plainText = (para.textContent ?? "").replace(/\s+/g, " ").trim();
+      const alreadyHasMarker = plainText.startsWith(markerText);
+      if (!alreadyHasMarker) {
+        const marker = doc.createElement("span");
+        marker.className = "__word-list-marker";
+        marker.textContent = `${markerText} `;
+        marker.style.display = "inline-block";
+        marker.style.minWidth = "1.8em";
+        marker.style.marginLeft = currentLevel > 0 ? `${currentLevel * 1.2}em` : "0";
+        marker.style.color = "inherit";
+        marker.style.fontWeight = "inherit";
+        para.prepend(marker);
+      }
     }
 
-    if (
-      styleProfile.trailingDateAlignedRight &&
-      styleProfile.trailingDateParagraphIndex !== null &&
-      styleProfile.trailingDateParagraphIndex === i
-    ) {
-      para.classList.add("__word-date-anchor");
-    }
+    // Date anchoring is represented by explicit spacer insertion.
+    // Avoid global flex/auto-margin layout because it distorts generic document flow.
   }
 
   normalizeEmptyParagraphMarkers(paragraphs);
-  return paragraphs;
+  return orderedTargets;
 }
 
 function paragraphHeightPx(paragraph: HTMLElement): number {
@@ -397,16 +467,20 @@ function applyFormattingMarks(doc: Document, showFormattingMarks: boolean): void
 }
 
 export function applyWordRenderModel({ doc, styleProfile, showFormattingMarks }: ApplyWordRenderOptions): void {
+  const effectiveProfile = styleProfile ?? createFallbackWordStyleProfile("__default_a4__");
+
   applyWordHtmlCompatibility(doc, {
-    forceBodyFontFamily: styleProfile?.bodyFontFamily,
-    forceHeadingFontFamily: styleProfile?.titleFontFamily
+    forceBodyFontFamily: effectiveProfile.bodyFontFamily,
+    forceHeadingFontFamily: effectiveProfile.titleFontFamily
   });
 
   let paragraphs = Array.from(doc.body.querySelectorAll("p")) as HTMLElement[];
   normalizeEmptyParagraphMarkers(paragraphs);
 
+  applyBaseProfileCss(doc, effectiveProfile);
+  applyInlineLayoutGuards(doc, effectiveProfile);
+
   if (styleProfile) {
-    applyBaseProfileCss(doc, styleProfile);
     paragraphs = applyParagraphProfiles(doc, styleProfile);
     applyKeepPagination(doc, styleProfile, paragraphs);
   }

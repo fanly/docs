@@ -9,6 +9,8 @@ export interface ImagePipelineOptions {
   uploadAsset: (asset: PreservedAsset, blob: Blob) => Promise<string>;
 }
 
+const inflightUploads = new Map<string, Promise<string>>();
+
 async function hashBlob(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
   const digest = await crypto.subtle.digest("SHA-256", buf);
@@ -53,9 +55,22 @@ export async function preserveEmbeddedImages(doc: Document, options: ImagePipeli
       bytes: blob.size
     };
 
-    const uploadedUrl = await options.uploadAsset(metadata, blob);
-    img.setAttribute("src", uploadedUrl);
-    img.setAttribute("data-asset-hash", hash);
+    try {
+      let uploadPromise = inflightUploads.get(hash);
+      if (!uploadPromise) {
+        uploadPromise = options.uploadAsset(metadata, blob);
+        inflightUploads.set(hash, uploadPromise);
+      }
+      const uploadedUrl = await uploadPromise;
+      img.setAttribute("src", uploadedUrl);
+      img.setAttribute("data-asset-hash", hash);
+      img.removeAttribute("data-asset-error");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "upload failed";
+      img.setAttribute("data-asset-error", message.slice(0, 160));
+    } finally {
+      inflightUploads.delete(hash);
+    }
   }
 }
 
@@ -94,7 +109,15 @@ export async function uploadAssetToUpyun(asset: PreservedAsset, blob: Blob): Pro
   });
 
   if (!response.ok) {
-    throw new Error(`Upload failed with status ${response.status}`);
+    let detail = "";
+    try {
+      const err = (await response.json()) as { error?: string; detail?: string };
+      detail = [err.error, err.detail].filter(Boolean).join(" | ");
+    } catch {
+      detail = await response.text();
+    }
+    const suffix = detail ? `: ${detail}` : "";
+    throw new Error(`Upload failed with status ${response.status}${suffix}`);
   }
 
   const data = (await response.json()) as { url: string };

@@ -46,6 +46,7 @@ export async function POST(request: Request) {
     const objectPath = `/word-assets/${yyyy}/${mm}/${hash}.${extension}`;
     const uploadUrl = `${apiDomain}/${bucket}${objectPath}`;
 
+    const uploadBody = await file.arrayBuffer();
     const uploadResponse = await fetch(uploadUrl, {
       method: "PUT",
       headers: {
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
         "Content-Type": file.type || "application/octet-stream",
         mkdir: "true"
       },
-      body: file.stream()
+      body: uploadBody
     });
 
     if (!uploadResponse.ok) {
@@ -68,6 +69,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ url, path: objectPath });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unexpected upload error";
+    console.error("[upyun-upload-error]", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

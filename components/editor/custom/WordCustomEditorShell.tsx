@@ -5,8 +5,11 @@ import { preserveEmbeddedImages, uploadAssetToUpyun } from "@/lib/assets/imagePi
 import { buildHtmlSnapshot } from "@/lib/render/htmlSnapshot";
 import { createAuditMetrics, type AuditMetric, targetFromProfile } from "@/lib/word/audit";
 import { buildCoverageReport } from "@/lib/word/coverage";
+import { parseDocxToHtmlSnapshot } from "@/lib/word/docxHtml";
 import { escapeTextToHtml, firstElementHtml } from "@/lib/word/editorHtml";
+import { extractFromClipboardDataTransfer, extractFromClipboardItems } from "@/lib/word/pastePipeline";
 import { applyWordRenderModel } from "@/lib/word/renderApply";
+import { buildStructureReport, type StructureReport } from "@/lib/word/structureCompare";
 import { parseDocxStyleProfile, type WordStyleProfile } from "@/lib/word/styleProfile";
 import { BlockIndexer, type IndexedBlock } from "./BlockIndexer";
 import { OverlayEditor } from "./OverlayEditor";
@@ -19,34 +22,53 @@ const templateHtml = buildHtmlSnapshot(`
   h1 { font-family: Calibri, sans-serif; margin: 0 0 10.67px; color: #0F4761; text-align: center; font-size: 32px; }
   p { margin: 0 0 10.67px; line-height: 1.158333; font-size: 14.6667px; }
 </style>
-<h1>离职信</h1>
-<p>感谢留总提供这么好的平台，也感谢留总的耐心和宽容，同时也感谢留总的教导。</p>
-<p>自己一直没能在工作中找到节奏感，<span style="color:#EE0000">也没能和公司处于相同步调里</span>，让自己一直处于疲劳的状态，这对公司也是不利的。所以考虑再三，决定提出离职。</p>
-<p>请留总批准，也祝愿公司越来越好。</p>
-<p style="text-align:right;margin-top:120px;">2026 年 2 月 5 日</p>
+<p><br/></p>
 `);
 
 export function WordCustomEditorShell() {
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const editorCanvasRef = useRef<HTMLDivElement>(null);
+  const pasteAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const detachFrameListenersRef = useRef<(() => void) | null>(null);
+  const frameHeightRef = useRef<number>(0);
+  const refreshTimerRef = useRef<number[]>([]);
   const indexer = useMemo(() => new BlockIndexer(), []);
 
   const [htmlSnapshot, setHtmlSnapshot] = useState(templateHtml);
   const [blocks, setBlocks] = useState<IndexedBlock[]>([]);
-  const [pasteHint, setPasteHint] = useState("在下方粘贴区按 Ctrl/Cmd+V，可直接导入 Word HTML 快照。");
+  const [pasteHint, setPasteHint] = useState("在下方粘贴区按 Ctrl/Cmd+V，可直接导入 Word HTML 快照。上传 Word 文件效果更佳。");
   const [editMode, setEditMode] = useState(false);
   const [showDebugBounds, setShowDebugBounds] = useState(false);
   const [showFormattingMarks, setShowFormattingMarks] = useState(false);
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
   const [auditMetrics, setAuditMetrics] = useState<AuditMetric[]>([]);
   const [styleProfile, setStyleProfile] = useState<WordStyleProfile | null>(null);
+  const [structureReport, setStructureReport] = useState<StructureReport>({ rows: [], pass: true });
 
   const activeBlock = blocks.find((block) => block.id === activeBlockId) ?? null;
   const auditPassed = auditMetrics.length > 0 && auditMetrics.every((m) => m.pass);
   const auditTarget = useMemo(() => targetFromProfile(styleProfile), [styleProfile]);
   const coverageReport = useMemo(() => buildCoverageReport(styleProfile), [styleProfile]);
+
+  const syncFrameHeight = useCallback((frame: HTMLIFrameElement, doc: Document) => {
+    const body = doc.body;
+    const root = doc.documentElement;
+    const measured = Math.max(
+      760,
+      body.scrollHeight,
+      body.offsetHeight,
+      root.scrollHeight,
+      root.offsetHeight
+    );
+    const nextHeight = measured + 24;
+    if (Math.abs(nextHeight - frameHeightRef.current) < 2) {
+      return;
+    }
+    frameHeightRef.current = nextHeight;
+    frame.style.height = `${nextHeight}px`;
+  }, []);
 
   const refreshIndexAndAudit = useCallback(() => {
     const frame = frameRef.current;
@@ -59,6 +81,7 @@ export function WordCustomEditorShell() {
       styleProfile,
       showFormattingMarks
     });
+    syncFrameHeight(frame, doc);
 
     const stageRect = stage.getBoundingClientRect();
     const frameRect = frame.getBoundingClientRect();
@@ -73,13 +96,26 @@ export function WordCustomEditorShell() {
     );
 
     setAuditMetrics(createAuditMetrics(doc, auditTarget));
-  }, [auditTarget, indexer, showFormattingMarks, styleProfile]);
+    setStructureReport(buildStructureReport(doc, styleProfile));
+  }, [auditTarget, indexer, showFormattingMarks, styleProfile, syncFrameHeight]);
+
+  const schedulePostLoadRefresh = useCallback(() => {
+    for (const timer of refreshTimerRef.current) {
+      window.clearTimeout(timer);
+    }
+    refreshTimerRef.current = [0, 240].map((delay) =>
+      window.setTimeout(() => {
+        refreshIndexAndAudit();
+      }, delay)
+    );
+  }, [refreshIndexAndAudit]);
 
   useEffect(() => {
     refreshIndexAndAudit();
   }, [htmlSnapshot, refreshIndexAndAudit]);
 
   const applyPastedHtml = (rawHtml: string, plainText?: string) => {
+    setStyleProfile(null);
     if (rawHtml.trim()) {
       setHtmlSnapshot(buildHtmlSnapshot(rawHtml));
       setPasteHint("已加载 HTML 快照（保真渲染）。");
@@ -94,6 +130,28 @@ export function WordCustomEditorShell() {
 
     setPasteHint("未检测到可导入内容，请在 Word/Docs 中重新复制后再试。");
   };
+
+  const handlePasteDataTransfer = useCallback(async (dataTransfer: DataTransfer) => {
+    const payload = await extractFromClipboardDataTransfer(dataTransfer);
+    applyPastedHtml(payload.html, payload.text);
+  }, []);
+
+  const attachFrameClipboardBridge = useCallback((frame: HTMLIFrameElement) => {
+    detachFrameListenersRef.current?.();
+    const frameDoc = frame.contentDocument;
+    if (!frameDoc) return;
+
+    const onFramePaste = (event: ClipboardEvent) => {
+      if (!event.clipboardData) return;
+      event.preventDefault();
+      void handlePasteDataTransfer(event.clipboardData);
+    };
+
+    frameDoc.addEventListener("paste", onFramePaste);
+    detachFrameListenersRef.current = () => {
+      frameDoc.removeEventListener("paste", onFramePaste);
+    };
+  }, [handlePasteDataTransfer]);
 
   const commitActiveBlock = async () => {
     const blockId = activeBlockId;
@@ -116,7 +174,11 @@ export function WordCustomEditorShell() {
     replacement.setAttribute("data-custom-block-id", blockId);
     node.replaceWith(replacement);
 
-    await preserveEmbeddedImages(doc, { uploadAsset: uploadAssetToUpyun }).catch(() => undefined);
+    await preserveEmbeddedImages(doc, { uploadAsset: uploadAssetToUpyun }).catch((error) => {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setPasteHint(`图片上传失败: ${message}`);
+      return undefined;
+    });
 
     const rebuilt = `<!DOCTYPE html>${doc.documentElement.outerHTML}`;
     setHtmlSnapshot(rebuilt);
@@ -133,6 +195,55 @@ export function WordCustomEditorShell() {
     editorCanvasRef.current?.focus();
     document.execCommand("foreColor", false, color);
   };
+
+  useEffect(() => {
+    const onWindowPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (editMode && activeBlockId) return;
+      const stage = stageRef.current;
+      if (!stage) return;
+      const target = event.target as Node | null;
+      if (target && !stage.contains(target)) return;
+      if (!event.clipboardData) return;
+
+      event.preventDefault();
+      void handlePasteDataTransfer(event.clipboardData);
+    };
+
+    window.addEventListener("paste", onWindowPaste);
+    return () => window.removeEventListener("paste", onWindowPaste);
+  }, [activeBlockId, editMode, handlePasteDataTransfer]);
+
+  useEffect(() => {
+    const onWindowKeyDown = (event: KeyboardEvent) => {
+      const isPasteCombo = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v";
+      if (!isPasteCombo) return;
+      if (editMode && activeBlockId) return;
+      const stage = stageRef.current;
+      if (!stage) return;
+
+      const target = event.target as Node | null;
+      if (target && !stage.contains(target)) return;
+
+      // Move focus to the paste area so browser paste events land on our controlled surface.
+      pasteAreaRef.current?.focus();
+      setPasteHint("检测到 Ctrl/Cmd+V，正在读取粘贴内容...");
+    };
+
+    window.addEventListener("keydown", onWindowKeyDown, true);
+    return () => window.removeEventListener("keydown", onWindowKeyDown, true);
+  }, [activeBlockId, editMode]);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of refreshTimerRef.current) {
+        window.clearTimeout(timer);
+      }
+      refreshTimerRef.current = [];
+      detachFrameListenersRef.current?.();
+      detachFrameListenersRef.current = null;
+    };
+  }, []);
 
   return (
     <div className="page-card">
@@ -158,19 +269,8 @@ export function WordCustomEditorShell() {
                   }
                   try {
                     const items = await navigator.clipboard.read();
-                    for (const item of items) {
-                      if (item.types.includes("text/html")) {
-                        const htmlBlob = await item.getType("text/html");
-                        applyPastedHtml(await htmlBlob.text());
-                        return;
-                      }
-                      if (item.types.includes("text/plain")) {
-                        const textBlob = await item.getType("text/plain");
-                        applyPastedHtml("", await textBlob.text());
-                        return;
-                      }
-                    }
-                    setPasteHint("剪贴板没有 text/html 或 text/plain。");
+                    const payload = await extractFromClipboardItems(items);
+                    applyPastedHtml(payload.html, payload.text);
                   } catch {
                     setPasteHint("读取系统剪贴板失败，请使用下方粘贴区 Ctrl/Cmd+V。");
                   }
@@ -180,7 +280,7 @@ export function WordCustomEditorShell() {
               </button>
 
               <button type="button" className={styles.toggleBtn} onClick={() => fileInputRef.current?.click()}>
-                上传 DOCX 样式基线
+                上传 Word 文件效果更佳
               </button>
               <input
                 ref={fileInputRef}
@@ -191,11 +291,13 @@ export function WordCustomEditorShell() {
                   const file = e.target.files?.[0];
                   if (!file) return;
                   try {
+                    const snapshot = await parseDocxToHtmlSnapshot(file);
                     const profile = await parseDocxStyleProfile(file);
+                    setHtmlSnapshot(snapshot);
                     setStyleProfile(profile);
-                    setPasteHint(`已加载样式基线: ${profile.sourceFileName}`);
+                    setPasteHint(`已加载 Word 文件并覆盖当前内容: ${profile.sourceFileName}。`);
                   } catch {
-                    setPasteHint("DOCX 样式基线解析失败，请确认文件格式。");
+                    setPasteHint("Word 文件解析失败，请确认文件格式。");
                   }
                   e.target.value = "";
                 }}
@@ -220,19 +322,18 @@ export function WordCustomEditorShell() {
               </label>
             </div>
 
-            <div
-              className={styles.pasteArea}
-              contentEditable
-              suppressContentEditableWarning
+            <textarea
+              ref={pasteAreaRef}
+              className={styles.pasteTextarea}
+              placeholder="在此处粘贴 Word / WPS / Google Docs 内容（Ctrl/Cmd+V）"
               onPaste={(event) => {
                 event.preventDefault();
-                const html = event.clipboardData.getData("text/html");
-                const text = event.clipboardData.getData("text/plain");
-                applyPastedHtml(html, text);
+                void handlePasteDataTransfer(event.clipboardData);
               }}
-            >
-              在此处粘贴 Word / WPS / Google Docs 内容（Ctrl/Cmd+V）
-            </div>
+              onFocus={() => {
+                setPasteHint("已聚焦粘贴框，按 Ctrl/Cmd+V 进行导入。");
+              }}
+            />
             <span className={styles.pasteHint}>{pasteHint}</span>
           </div>
 
@@ -240,17 +341,19 @@ export function WordCustomEditorShell() {
             htmlSnapshot={htmlSnapshot}
             onLoad={(frame) => {
               frameRef.current = frame;
+              attachFrameClipboardBridge(frame);
               const doc = frame.contentDocument;
               if (!doc) return;
 
               void (async () => {
-                await preserveEmbeddedImages(doc, { uploadAsset: uploadAssetToUpyun }).catch(() => undefined);
+                await preserveEmbeddedImages(doc, { uploadAsset: uploadAssetToUpyun }).catch((error) => {
+                  const message = error instanceof Error ? error.message : "未知错误";
+                  setPasteHint(`图片上传失败: ${message}`);
+                  return undefined;
+                });
 
-                const rebuilt = `<!DOCTYPE html>${doc.documentElement.outerHTML}`;
-                if (rebuilt !== htmlSnapshot) {
-                  setHtmlSnapshot(rebuilt);
-                }
                 refreshIndexAndAudit();
+                schedulePostLoadRefresh();
               })();
             }}
           />
@@ -299,11 +402,12 @@ export function WordCustomEditorShell() {
             <div className={styles.auditStatus} data-pass={auditPassed}>
               {auditMetrics.length === 0 ? "等待文档加载" : auditPassed ? "通过" : "未通过"}
             </div>
+            {!styleProfile ? <div className={styles.profileTag}>当前模式: 快照渲染（上传 Word 文件效果更佳）</div> : null}
             {styleProfile ? (
               <>
-                <div className={styles.profileTag}>基线文件: {styleProfile.sourceFileName}</div>
+                <div className={styles.profileTag}>Word 文件: {styleProfile.sourceFileName}</div>
                 <div className={styles.profileTag}>
-                  字体基线: {styleProfile.discoveredFonts.length > 0 ? styleProfile.discoveredFonts.join(", ") : "未识别"}
+                  字体映射: {styleProfile.discoveredFonts.length > 0 ? styleProfile.discoveredFonts.join(", ") : "未识别"}
                 </div>
               </>
             ) : null}
@@ -349,6 +453,27 @@ export function WordCustomEditorShell() {
                     <td>{item.name}</td>
                     <td>{item.supported ? "支持" : "待完善"}</td>
                     <td>{item.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </article>
+
+          <article className={styles.panel}>
+            <h3>结构对比</h3>
+            <div className={styles.profileTag}>{structureReport.pass ? "结构稳定" : "结构存在偏差"}</div>
+            <table className={styles.auditTable}>
+              <thead>
+                <tr><th>项</th><th>实际</th><th>Word文件参考</th><th>差值</th><th>判定</th></tr>
+              </thead>
+              <tbody>
+                {structureReport.rows.map((row) => (
+                  <tr key={row.name}>
+                    <td>{row.name}</td>
+                    <td>{row.actual}</td>
+                    <td>{row.expected === null ? "-" : row.expected}</td>
+                    <td>{row.delta === null ? "-" : row.delta >= 0 ? `+${row.delta}` : row.delta}</td>
+                    <td>{row.pass ? "OK" : "偏差"}</td>
                   </tr>
                 ))}
               </tbody>
