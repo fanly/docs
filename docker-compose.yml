@@ -1,0 +1,18 @@
+services:
+  docs-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: word-arch-lab:bun
+    container_name: word-arch-lab
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_TELEMETRY_DISABLED=1
+      - NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+      - NEXT_PUBLIC_NUTRIENT_SDK_SCRIPT=${NEXT_PUBLIC_NUTRIENT_SDK_SCRIPT:-}
+      - NEXT_PUBLIC_NUTRIENT_LICENSE_KEY=${NEXT_PUBLIC_NUTRIENT_LICENSE_KEY:-}
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    command: ["bun", "run", "dev:host"]

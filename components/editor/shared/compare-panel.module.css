@@ -1,0 +1,35 @@
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.table th,
+.table td {
+  border-top: 1px solid #e7eaf2;
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 6px;
+}
+
+.table th {
+  font-weight: 600;
+  color: #27304b;
+  background: #f8faff;
+}
+
+.table td {
+  color: #4f566a;
+}

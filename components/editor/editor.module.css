@@ -1,0 +1,117 @@
+.shell {
+  min-height: 100vh;
+  padding: 18px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 88%, #e8efff 12%);
+  margin-bottom: 14px;
+}
+
+.toolbar button,
+.toolbar select {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, #3b5af0 30%);
+  background: var(--surface);
+  padding: 7px 11px;
+  border-radius: 10px;
+}
+
+.toolbar button {
+  cursor: pointer;
+}
+
+.stage {
+  position: relative;
+  min-height: 70vh;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #f7f9ff 0%, #eef3ff 100%);
+}
+
+.frame {
+  width: 100%;
+  min-height: 70vh;
+  border: 0;
+  background: #fff;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.blockHotspot {
+  position: absolute;
+  border: 1px solid transparent;
+  pointer-events: auto;
+  cursor: text;
+  transition: border-color 140ms ease;
+}
+
+.blockHotspot:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, #fff 40%);
+}
+
+.blockHotspotActive {
+  border-color: #1b46db;
+  background: color-mix(in srgb, #b4c7ff 20%, transparent 80%);
+}
+
+.blockEditor {
+  position: fixed;
+  z-index: 30;
+  border: 2px solid #1f4eff;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(20, 40, 120, 0.18);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.blockCanvas {
+  min-height: 100px;
+  outline: none;
+}
+
+.blockActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.pageGuide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed color-mix(in srgb, #5576ff 70%, white 30%);
+}
+
+.meta {
+  font-size: 12px;
+  color: #4a5370;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  margin-top: 12px;
+  padding: 10px;
+}
+
+.semanticOutput {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
