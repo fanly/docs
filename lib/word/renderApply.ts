@@ -317,6 +317,7 @@ function applyParagraphProfiles(doc: Document, styleProfile: WordStyleProfile): 
     const profile = target.profile;
     if (!para) continue;
     orderedTargets.push(para);
+    para.removeAttribute("data-word-list");
 
     para.style.textAlign = profile.align;
     if (profile.beforePx !== null) para.style.marginTop = `${profile.beforePx.toFixed(2)}px`;
@@ -340,6 +341,7 @@ function applyParagraphProfiles(doc: Document, styleProfile: WordStyleProfile): 
     }
 
     if (profile.listNumId !== null && profile.listLevel !== null) {
+      para.setAttribute("data-word-list", "1");
       if (profile.sectionBreakBefore) {
         listCounters.set(profile.listNumId, []);
       }

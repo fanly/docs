@@ -56,6 +56,18 @@ function mockProfile(paragraphCount: number): WordStyleProfile {
   };
 }
 
+function mockProfileWithList(paragraphCount: number, listIndexes: number[]): WordStyleProfile {
+  const profile = mockProfile(paragraphCount);
+  const listSet = new Set(listIndexes);
+  profile.paragraphProfiles = profile.paragraphProfiles.map((p) => ({
+    ...p,
+    listNumId: listSet.has(p.index) ? 1 : null,
+    listLevel: listSet.has(p.index) ? 0 : null,
+    listFormat: listSet.has(p.index) ? "bullet" : null
+  }));
+  return profile;
+}
+
 describe("buildStructureReport", () => {
   it("reports stable structure when paragraph count is close to baseline", () => {
     document.body.innerHTML = "<p>A</p><p>B</p><h1>T</h1><img src='x'/>";
@@ -68,5 +80,18 @@ describe("buildStructureReport", () => {
     const report = buildStructureReport(document, mockProfile(20));
     const paragraphRow = report.rows.find((row) => row.name === "段落数(p)");
     expect(paragraphRow?.pass).toBe(false);
+  });
+
+  it("counts list items from word-marked list paragraphs", () => {
+    document.body.innerHTML = `
+      <p data-word-list="1">A</p>
+      <p data-word-list="1">B</p>
+      <p>C</p>
+    `;
+    const report = buildStructureReport(document, mockProfileWithList(3, [0, 1]));
+    const listRow = report.rows.find((row) => row.name === "列表项(list)");
+    expect(listRow?.actual).toBe(2);
+    expect(listRow?.expected).toBe(2);
+    expect(listRow?.pass).toBe(true);
   });
 });

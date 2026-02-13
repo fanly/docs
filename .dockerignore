@@ -7,3 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 .DS_Store
 coverage
+tests
+docs
+assets/test-docs
+scripts_generate_stress_docx.py
+scripts_generate_test_docx.py
+.env.local
+tsconfig.tsbuildinfo

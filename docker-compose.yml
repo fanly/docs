@@ -1,18 +1,70 @@
 services:
-  docs-app:
+  docs-dev:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: word-arch-lab:bun
-    container_name: word-arch-lab
+      dockerfile: Dockerfile.dev
+      args:
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-mirrors.aliyun.com}
+        BUN_BASE_IMAGE: ${BUN_BASE_IMAGE:-docker.m.daocloud.io/oven/bun:1.2.2-alpine}
+    image: word-arch-lab:bun-dev
+    container_name: word-arch-lab-dev
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${HOST_PORT:-8787}:3000"
     environment:
       - NEXT_TELEMETRY_DISABLED=1
       - NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
       - NEXT_PUBLIC_NUTRIENT_SDK_SCRIPT=${NEXT_PUBLIC_NUTRIENT_SDK_SCRIPT:-}
       - NEXT_PUBLIC_NUTRIENT_LICENSE_KEY=${NEXT_PUBLIC_NUTRIENT_LICENSE_KEY:-}
+      - UPYUN_BUCKET=${UPYUN_BUCKET:-}
+      - UPYUN_OPERATOR=${UPYUN_OPERATOR:-}
+      - UPYUN_PASSWORD=${UPYUN_PASSWORD:-}
+      - UPYUN_DOMAIN=${UPYUN_DOMAIN:-https://v0.api.upyun.com}
+      - UPYUN_CDN_DOMAIN=${UPYUN_CDN_DOMAIN:-}
     volumes:
       - ./:/app
-      - /app/node_modules
-    command: ["bun", "run", "dev:host"]
+      - docs_bun_node_modules:/app/node_modules
+      - docs_next_cache:/app/.next
+      - docs_bun_cache:/root/.bun/install/cache
+    command: ["/bin/sh", "-c", "bun install && bun run dev:host"]
+    profiles: ["dev"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  docs-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-mirrors.aliyun.com}
+        BUN_BASE_IMAGE: ${BUN_BASE_IMAGE:-docker.m.daocloud.io/oven/bun:1.2.2-alpine}
+    image: word-arch-lab:bun
+    container_name: word-arch-lab
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8787}:3000"
+    environment:
+      - NEXT_TELEMETRY_DISABLED=1
+      - NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+      - NEXT_PUBLIC_NUTRIENT_SDK_SCRIPT=${NEXT_PUBLIC_NUTRIENT_SDK_SCRIPT:-}
+      - NEXT_PUBLIC_NUTRIENT_LICENSE_KEY=${NEXT_PUBLIC_NUTRIENT_LICENSE_KEY:-}
+      - UPYUN_BUCKET=${UPYUN_BUCKET:-}
+      - UPYUN_OPERATOR=${UPYUN_OPERATOR:-}
+      - UPYUN_PASSWORD=${UPYUN_PASSWORD:-}
+      - UPYUN_DOMAIN=${UPYUN_DOMAIN:-https://v0.api.upyun.com}
+      - UPYUN_CDN_DOMAIN=${UPYUN_CDN_DOMAIN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    profiles: ["prod"]
+
+volumes:
+  docs_bun_node_modules:
+  docs_next_cache:
+  docs_bun_cache:

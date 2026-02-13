@@ -43,6 +43,7 @@ export function WordCustomEditorShell() {
   const [showDebugBounds, setShowDebugBounds] = useState(false);
   const [showFormattingMarks, setShowFormattingMarks] = useState(false);
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
+  const [documentSelected, setDocumentSelected] = useState(false);
   const [auditMetrics, setAuditMetrics] = useState<AuditMetric[]>([]);
   const [styleProfile, setStyleProfile] = useState<WordStyleProfile | null>(null);
   const [structureReport, setStructureReport] = useState<StructureReport>({ rows: [], pass: true });
@@ -115,6 +116,7 @@ export function WordCustomEditorShell() {
   }, [htmlSnapshot, refreshIndexAndAudit]);
 
   const applyPastedHtml = (rawHtml: string, plainText?: string) => {
+    setDocumentSelected(false);
     setStyleProfile(null);
     if (rawHtml.trim()) {
       setHtmlSnapshot(buildHtmlSnapshot(rawHtml));
@@ -136,6 +138,14 @@ export function WordCustomEditorShell() {
     applyPastedHtml(payload.html, payload.text);
   }, []);
 
+  const clearDocument = useCallback(() => {
+    setHtmlSnapshot(buildHtmlSnapshot("<p><br/></p>"));
+    setStyleProfile(null);
+    setActiveBlockId(null);
+    setDocumentSelected(false);
+    setPasteHint("文档已清空。");
+  }, []);
+
   const attachFrameClipboardBridge = useCallback((frame: HTMLIFrameElement) => {
     detachFrameListenersRef.current?.();
     const frameDoc = frame.contentDocument;
@@ -147,11 +157,31 @@ export function WordCustomEditorShell() {
       void handlePasteDataTransfer(event.clipboardData);
     };
 
+    const onFrameKeyDown = (event: KeyboardEvent) => {
+      if (editMode && activeBlockId) return;
+      const isSelectAll = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a";
+      const isDelete = event.key === "Delete" || event.key === "Backspace";
+
+      if (isSelectAll) {
+        event.preventDefault();
+        setDocumentSelected(true);
+        setPasteHint("已全选文档，按 Delete/Backspace 清空。");
+        return;
+      }
+
+      if (isDelete && documentSelected) {
+        event.preventDefault();
+        clearDocument();
+      }
+    };
+
     frameDoc.addEventListener("paste", onFramePaste);
+    frameDoc.addEventListener("keydown", onFrameKeyDown, true);
     detachFrameListenersRef.current = () => {
       frameDoc.removeEventListener("paste", onFramePaste);
+      frameDoc.removeEventListener("keydown", onFrameKeyDown, true);
     };
-  }, [handlePasteDataTransfer]);
+  }, [activeBlockId, clearDocument, documentSelected, editMode, handlePasteDataTransfer]);
 
   const commitActiveBlock = async () => {
     const blockId = activeBlockId;
@@ -216,14 +246,35 @@ export function WordCustomEditorShell() {
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
-      const isPasteCombo = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v";
-      if (!isPasteCombo) return;
       if (editMode && activeBlockId) return;
       const stage = stageRef.current;
       if (!stage) return;
 
       const target = event.target as Node | null;
       if (target && !stage.contains(target)) return;
+
+      const isSelectAll = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a";
+      if (isSelectAll) {
+        event.preventDefault();
+        setDocumentSelected(true);
+        setPasteHint("已全选文档，按 Delete/Backspace 清空。");
+        return;
+      }
+
+      const isDelete = event.key === "Delete" || event.key === "Backspace";
+      if (isDelete && documentSelected) {
+        event.preventDefault();
+        clearDocument();
+        return;
+      }
+
+      const isPasteCombo = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v";
+      if (!isPasteCombo) {
+        if (!event.metaKey && !event.ctrlKey && event.key.length === 1) {
+          setDocumentSelected(false);
+        }
+        return;
+      }
 
       // Move focus to the paste area so browser paste events land on our controlled surface.
       pasteAreaRef.current?.focus();
@@ -232,7 +283,7 @@ export function WordCustomEditorShell() {
 
     window.addEventListener("keydown", onWindowKeyDown, true);
     return () => window.removeEventListener("keydown", onWindowKeyDown, true);
-  }, [activeBlockId, editMode]);
+  }, [activeBlockId, clearDocument, documentSelected, editMode]);
 
   useEffect(() => {
     return () => {
@@ -281,6 +332,9 @@ export function WordCustomEditorShell() {
 
               <button type="button" className={styles.toggleBtn} onClick={() => fileInputRef.current?.click()}>
                 上传 Word 文件效果更佳
+              </button>
+              <button type="button" className={styles.toggleBtn} onClick={clearDocument}>
+                清空内容
               </button>
               <input
                 ref={fileInputRef}

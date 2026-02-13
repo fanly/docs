@@ -19,7 +19,7 @@
 - Testing: Vitest + jsdom
 - Quality: ESLint + TypeScript strict mode
 - Asset pipeline: Upyun（通过 API Route 上传）
-- Runtime: Node/npm（可选 Docker/Bun）
+- Runtime: Node/npm（本地）+ Bun（Docker 生产部署）
 
 ## 路由
 
@@ -171,10 +171,101 @@ npm run lint
 npm run test
 ```
 
-## Docker / Bun（可选）
+## Docker 部署（Bun + 国内加速 + 最小化镜像）
+
+镜像策略：
+- Bun 多阶段构建（`deps -> builder -> runner`）
+- Next.js `standalone` 产物，仅拷贝运行所需文件
+- Alpine 源可配置国内镜像（默认阿里云）
+- 生产容器无源码挂载、无 dev server
+
+### 1) 准备环境变量
+
+服务器目录放置 `.env.local`（示例）：
 
 ```bash
-docker compose up --build
+UPYUN_BUCKET=your_bucket
+UPYUN_OPERATOR=your_operator
+UPYUN_PASSWORD=your_password
+UPYUN_DOMAIN=https://v0.api.upyun.com
+UPYUN_CDN_DOMAIN=https://your-cdn-domain
+NEXT_PUBLIC_NUTRIENT_SDK_SCRIPT=
+NEXT_PUBLIC_NUTRIENT_LICENSE_KEY=
+ALPINE_MIRROR=mirrors.aliyun.com
+HOST_PORT=8787
+BUN_BASE_IMAGE=docker.m.daocloud.io/oven/bun:1.2.2-alpine
 ```
 
-适合团队统一环境与构建提速场景。
+### 2) 构建并启动
+
+```bash
+docker compose --env-file .env.local up -d --build
+```
+
+### 3) 查看状态
+
+```bash
+docker compose ps
+docker compose logs -f docs-app
+```
+
+### 4) 更新发布
+
+```bash
+git pull
+docker compose --env-file .env.local up -d --build
+```
+
+### 5) 停止服务
+
+```bash
+docker compose down
+```
+
+## Docker 开发模式（代码改动立即生效，无需反复 build）
+
+适用场景：你现在这个问题（改代码后希望立刻生效，避免每次重建镜像）。
+
+### 启动开发容器
+
+```bash
+docker compose --profile dev --env-file .env.local up -d --build
+```
+
+后续仅改代码时，**不需要 rebuild**，Next.js 会在容器内热更新。
+默认访问端口：`http://服务器IP:8787`（可通过 `.env.local` 的 `HOST_PORT` 覆盖）。
+
+### 常用命令
+
+```bash
+# 查看日志
+docker compose logs -f docs-dev
+
+# 重启开发容器（不重建）
+docker compose restart docs-dev
+
+# 仅依赖变化时才重建
+docker compose --profile dev --env-file .env.local up -d --build docs-dev
+
+# 停止开发容器
+docker compose --profile dev down
+```
+
+说明：
+- `docs-dev` 使用源码挂载（`./:/app`），代码改动实时生效
+- `node_modules/.next/bun cache` 使用命名卷，避免每次冷启动全量安装
+- `docs-app`（`prod` profile）保持最小化生产镜像，不受开发模式影响
+- `BUN_BASE_IMAGE` 默认使用 `docker.m.daocloud.io`；如所在机房更适合其他代理可直接改为：
+  - `dockerproxy.com/oven/bun:1.2.2-alpine`
+  - `ccr.ccs.tencentyun.com/dockerhub/oven/bun:1.2.2-alpine`（可用性依机房网络）
+
+### 镜像拉取超时排障
+
+如果出现 `failed to fetch oauth token` / `i/o timeout`：
+
+```bash
+# 直接临时覆盖基础镜像源启动
+BUN_BASE_IMAGE=dockerproxy.com/oven/bun:1.2.2-alpine docker compose --profile dev --env-file .env.local up -d --build
+```
+
+建议将可用镜像源固化到 `.env.local`，避免每次手动设置。

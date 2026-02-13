@@ -1,0 +1,15 @@
+ARG BUN_BASE_IMAGE=docker.m.daocloud.io/oven/bun:1.2.2-alpine
+FROM ${BUN_BASE_IMAGE}
+WORKDIR /app
+
+ARG ALPINE_MIRROR=mirrors.aliyun.com
+RUN sed -i "s/dl-cdn.alpinelinux.org/${ALPINE_MIRROR}/g" /etc/apk/repositories
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+
+COPY package.json package-lock.json* ./
+RUN bun install
+
+EXPOSE 3000
+CMD ["bun", "run", "dev:host"]

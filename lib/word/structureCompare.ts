@@ -17,11 +17,19 @@ function count(doc: Document, selector: string): number {
   return doc.body.querySelectorAll(selector).length;
 }
 
+function countListItems(doc: Document): number {
+  return count(doc, "li, p[data-word-list='1']");
+}
+
 export function buildStructureReport(doc: Document, styleProfile: WordStyleProfile | null): StructureReport {
   const expectedParagraphs = styleProfile ? styleProfile.paragraphProfiles.length : null;
   const expectedHeadings = styleProfile
     ? styleProfile.paragraphProfiles.filter((p) => p.text.length > 0).length
     : null;
+  const expectedListItems = styleProfile
+    ? styleProfile.paragraphProfiles.filter((p) => p.listNumId !== null && p.listLevel !== null).length
+    : null;
+  const actualListItems = countListItems(doc);
 
   const rows: StructureRow[] = [
     {
@@ -39,11 +47,11 @@ export function buildStructureReport(doc: Document, styleProfile: WordStyleProfi
       pass: true
     },
     {
-      name: "列表项(li)",
-      actual: count(doc, "li"),
-      expected: null,
-      delta: null,
-      pass: true
+      name: "列表项(list)",
+      actual: actualListItems,
+      expected: expectedListItems,
+      delta: expectedListItems === null ? null : actualListItems - expectedListItems,
+      pass: expectedListItems === null ? true : Math.abs(actualListItems - expectedListItems) <= 2
     },
     {
       name: "表格数(table)",
