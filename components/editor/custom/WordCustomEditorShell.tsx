@@ -26,6 +26,7 @@ const templateHtml = buildHtmlSnapshot(`
 `);
 
 export function WordCustomEditorShell() {
+  const showStyleAudit = process.env.NEXT_PUBLIC_SHOW_STYLE_AUDIT === "1";
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const editorCanvasRef = useRef<HTMLDivElement>(null);
@@ -96,9 +97,13 @@ export function WordCustomEditorShell() {
       }))
     );
 
-    setAuditMetrics(createAuditMetrics(doc, auditTarget));
+    if (showStyleAudit) {
+      setAuditMetrics(createAuditMetrics(doc, auditTarget));
+    } else if (auditMetrics.length > 0) {
+      setAuditMetrics([]);
+    }
     setStructureReport(buildStructureReport(doc, styleProfile));
-  }, [auditTarget, indexer, showFormattingMarks, styleProfile, syncFrameHeight]);
+  }, [auditMetrics.length, auditTarget, indexer, showFormattingMarks, showStyleAudit, styleProfile, syncFrameHeight]);
 
   const schedulePostLoadRefresh = useCallback(() => {
     for (const timer of refreshTimerRef.current) {
@@ -451,37 +456,39 @@ export function WordCustomEditorShell() {
         </div>
 
         <div style={{ display: "grid", gap: 12 }}>
-          <article className={styles.panel}>
-            <h3>样式一致性诊断</h3>
-            <div className={styles.auditStatus} data-pass={auditPassed}>
-              {auditMetrics.length === 0 ? "等待文档加载" : auditPassed ? "通过" : "未通过"}
-            </div>
-            {!styleProfile ? <div className={styles.profileTag}>当前模式: 快照渲染（上传 Word 文件效果更佳）</div> : null}
-            {styleProfile ? (
-              <>
-                <div className={styles.profileTag}>Word 文件: {styleProfile.sourceFileName}</div>
-                <div className={styles.profileTag}>
-                  字体映射: {styleProfile.discoveredFonts.length > 0 ? styleProfile.discoveredFonts.join(", ") : "未识别"}
-                </div>
-              </>
-            ) : null}
-            <table className={styles.auditTable}>
-              <thead>
-                <tr><th>指标</th><th>实际</th><th>目标</th><th>偏差</th><th>判定</th></tr>
-              </thead>
-              <tbody>
-                {auditMetrics.map((metric) => (
-                  <tr key={metric.label}>
-                    <td>{metric.label}</td>
-                    <td>{metric.actual.toFixed(2)} {metric.unit}</td>
-                    <td>{metric.expected.toFixed(2)} {metric.unit}</td>
-                    <td>{metric.delta >= 0 ? "+" : ""}{metric.delta.toFixed(2)} {metric.unit}</td>
-                    <td>{metric.pass ? "OK" : "偏差"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </article>
+          {showStyleAudit ? (
+            <article className={styles.panel}>
+              <h3>样式一致性诊断</h3>
+              <div className={styles.auditStatus} data-pass={auditPassed}>
+                {auditMetrics.length === 0 ? "等待文档加载" : auditPassed ? "通过" : "未通过"}
+              </div>
+              {!styleProfile ? <div className={styles.profileTag}>当前模式: 快照渲染（上传 Word 文件效果更佳）</div> : null}
+              {styleProfile ? (
+                <>
+                  <div className={styles.profileTag}>Word 文件: {styleProfile.sourceFileName}</div>
+                  <div className={styles.profileTag}>
+                    字体映射: {styleProfile.discoveredFonts.length > 0 ? styleProfile.discoveredFonts.join(", ") : "未识别"}
+                  </div>
+                </>
+              ) : null}
+              <table className={styles.auditTable}>
+                <thead>
+                  <tr><th>指标</th><th>实际</th><th>目标</th><th>偏差</th><th>判定</th></tr>
+                </thead>
+                <tbody>
+                  {auditMetrics.map((metric) => (
+                    <tr key={metric.label}>
+                      <td>{metric.label}</td>
+                      <td>{metric.actual.toFixed(2)} {metric.unit}</td>
+                      <td>{metric.expected.toFixed(2)} {metric.unit}</td>
+                      <td>{metric.delta >= 0 ? "+" : ""}{metric.delta.toFixed(2)} {metric.unit}</td>
+                      <td>{metric.pass ? "OK" : "偏差"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </article>
+          ) : null}
 
           <article className={styles.panel}>
             <h3>架构说明</h3>
